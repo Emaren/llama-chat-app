@@ -11,16 +11,20 @@ export default function Home() {
   const [input, setInput] = useState('')
 
   useEffect(() => {
-    fetch('https://chat-api.aoe2hdbets.com/chat/agents')
+    fetch('https://llama-chat.aoe2hdbets.com/api/chat/agents')
       .then(res => res.json())
-      .then(setAgents)
+      .then((data) => setAgents(data))
   }, [])
 
   useEffect(() => {
     if (!selectedAgent) return
-    fetch(`https://chat-api.aoe2hdbets.com/chat/messages/${selectedAgent}`)
-      .then(res => res.json())
+    fetch(`https://llama-chat.aoe2hdbets.com/api/chat/messages/${selectedAgent}`)
+      .then(res => {
+        if (!res.ok) throw new Error('Message fetch failed')
+        return res.json()
+      })
       .then(setMessages)
+      .catch(() => setMessages([]))  // Fallback to empty array if 404
   }, [selectedAgent])
 
   return (
@@ -84,7 +88,7 @@ export default function Home() {
                 setInput('')
 
                 try {
-                  const res = await fetch('https://chat-api.aoe2hdbets.com/chat/send', {
+                  const res = await fetch('https://llama-chat.aoe2hdbets.com/api/chat/send', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ to: selectedAgent, text: input }),
