@@ -1,14 +1,3 @@
-/* ────────────────────────────────────────────────────────────────
-   src/lib/ollamaStream.ts
-   ---------------------------------------------------------------
-   Turns the Server-Sent-Events from POST /api/chat/llama3 into a
-   browser-friendly ReadableStream<{ data:string; done:boolean }>.
-
-   • Forces `"stream": true` even if the caller forgets it
-   • Uses eventsource-parser to split “data:” frames
-   • Emits { done:true } once the backend closes or goes idle
-───────────────────────────────────────────────────────────────────*/
-
 import {
   createParser,
   type ParsedEvent,
@@ -16,21 +5,12 @@ import {
 } from 'eventsource-parser';
 
 export interface ChatChunk {
-  /** Model delta / token */
   data: string;
-  /** true ⇢ backend closed (or idle timeout hit) */
   done: boolean;
 }
 
-const IDLE_MS = 90_000; // 90 s of silence ⇒ stop
+const IDLE_MS = 90_000;
 
-/**
- * Open a streaming chat with the FastAPI gateway.
- *
- * @param body   Regular JSON body; `"stream":true` is added.
- * @param signal Optional AbortSignal to cancel the fetch.
- * @param base   Optional endpoint override.
- */
 export function streamChat(
   body: Record<string, unknown>,
   signal?: AbortSignal,
@@ -41,7 +21,6 @@ export function streamChat(
 
   return new ReadableStream<ChatChunk>({
     async start(controller) {
-      // 1 ── POST to FastAPI
       const res = await fetch(base, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -56,13 +35,20 @@ export function streamChat(
         return;
       }
 
-      // 2 ── split “data:” frames
       const parser = createParser((evt: ParsedEvent | ReconnectInterval) => {
-        if ('data' in evt) controller.enqueue({ data: evt.data, done: false });
+        if ('data' in evt) {
+          try {
+            const chunk = JSON.parse(evt.data) as ChatChunk;
+            controller.enqueue(chunk);
+            if (chunk.done) controller.close();
+          } catch {
+            controller.error(new Error('Malformed JSON in stream chunk'));
+          }
+        }
       });
 
-      const reader   = res.body.getReader();
-      let   lastBeat = Date.now();
+      const reader = res.body.getReader();
+      let lastBeat = Date.now();
 
       while (true) {
         const { value, done } = await reader.read();
@@ -71,11 +57,9 @@ export function streamChat(
         parser.feed(decoder.decode(value));
         lastBeat = Date.now();
 
-        // idle guard – Ollama can stall mid-stream
         if (Date.now() - lastBeat > IDLE_MS) break;
       }
 
-      // 3 ── upstream closed
       controller.enqueue({ data: '', done: true });
       controller.close();
     },

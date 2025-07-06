@@ -1,6 +1,3 @@
-// src/app/page.tsx
-// Same dark-theme UI, now wired to stream responses character-by-character.
-
 'use client';
 
 import { useEffect, useRef, useState, FormEvent } from 'react';
@@ -11,12 +8,12 @@ type ChatMsg = { from: string; text: string };
 
 export default function Home() {
   const [agents, setAgents] = useState<string[]>([]);
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
-  const [messages, setMessages] = useState<ChatMsg[]>([]);
-  const [input, setInput] = useState('');
+  const [selected, setSelected] = useState<string | null>(null);
+  const [msgs, setMsgs] = useState<ChatMsg[]>([]);
+  const [draft, setDraft] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
+  const listRef = useRef<HTMLDivElement>(null);
 
-  /* ── load agent list once ── */
   useEffect(() => {
     fetch(`${process.env.NEXT_PUBLIC_API_BASE}/agents`)
       .then(r => r.json())
@@ -24,37 +21,44 @@ export default function Home() {
       .catch(console.error);
   }, []);
 
-  /* ── load history every time agent changes ── */
   useEffect(() => {
-    if (!selectedAgent) return;
-    fetch(`${process.env.NEXT_PUBLIC_API_BASE}/messages/${selectedAgent}`) 
+    if (!selected) return;
+    fetch(`${process.env.NEXT_PUBLIC_API_BASE}/messages/${selected}`)
       .then(r => (r.ok ? r.json() : []))
-      .then(setMessages)
-      .catch(() => setMessages([]));
-  }, [selectedAgent]);
+      .then(setMsgs)
+      .catch(() => setMsgs([]));
+  }, [selected]);
 
-  /* ── send prompt + stream reply ── */
+  useEffect(() => {
+    listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
+  }, [msgs]);
+
   async function handleSend(e?: FormEvent) {
     e?.preventDefault();
-    if (!input.trim() || !selectedAgent) return;
+    if (!draft.trim() || !selected) return;
 
-    const prompt = input;
-    setInput('');
-    setMessages(m => [...m, { from: 'me', text: prompt }]);
+    const prompt = draft;
+    setDraft('');
+    setMsgs(m => [...m, { from: 'me', text: prompt }]);
 
     try {
-      const reader = streamChat({ to: selectedAgent, text: prompt }).getReader();
-      let acc = '';
+      const stream = streamChat({ text: prompt, to: selected });
+      const reader = stream.getReader();
 
+      let created = false;
       while (true) {
-        const { done, value } = await reader.read();
+        const { value, done } = await reader.read();
         if (done) break;
-        acc += value.data;
+        if (!value?.data?.trim()) continue;
 
-        setMessages(m => {
-          const next = [...m];
-          if (next[next.length - 1]?.from === selectedAgent) next.pop();
-          next.push({ from: selectedAgent, text: acc });
+        setMsgs(prev => {
+          const next = [...prev];
+          if (!created) {
+            next.push({ from: selected, text: value.data });
+            created = true;
+          } else {
+            next[next.length - 1].text += value.data;
+          }
           return next;
         });
       }
@@ -63,19 +67,17 @@ export default function Home() {
     }
   }
 
-  /* ── UI ── */
   return (
     <div className="h-screen flex bg-gray-950 text-white">
-      {/* sidebar */}
       <aside className="w-64 bg-gray-900 p-4 space-y-2 border-r border-gray-800">
         <h2 className="text-xl font-semibold mb-4">Agents</h2>
         {agents.map(a => (
           <div
             key={a}
-            onClick={() => setSelectedAgent(a)}
+            onClick={() => setSelected(a)}
             className={clsx(
               'cursor-pointer px-3 py-2 rounded-md transition',
-              selectedAgent === a ? 'bg-gray-700 font-bold' : 'hover:bg-gray-800',
+              selected === a ? 'bg-gray-700 font-bold' : 'hover:bg-gray-800',
             )}
           >
             {a}
@@ -83,18 +85,20 @@ export default function Home() {
         ))}
       </aside>
 
-      {/* chat column */}
       <section className="flex-1 flex flex-col">
         <header className="px-6 py-4 bg-gray-900 border-b border-gray-800 font-semibold text-lg">
-          {selectedAgent ? `Chat with ${selectedAgent}` : 'Select an agent'}
+          {selected ? `Chat with ${selected}` : 'Select an agent'}
         </header>
 
-        <div className="flex-1 overflow-y-auto p-6 space-y-3 text-sm">
-          {messages.map((m, i) => (
+        <div
+          ref={listRef}
+          className="flex-1 overflow-y-auto p-6 space-y-3 text-sm scroll-smooth"
+        >
+          {msgs.map((m, i) => (
             <p
               key={i}
               className={clsx(
-                'max-w-md px-4 py-2 rounded-lg',
+                'max-w-md px-4 py-2 rounded-lg whitespace-pre-wrap break-words',
                 m.from === 'me'
                   ? 'bg-blue-600 text-white ml-auto'
                   : 'bg-gray-800 text-white',
@@ -105,21 +109,22 @@ export default function Home() {
           ))}
         </div>
 
-        {selectedAgent && (
+        {selected && (
           <form
             onSubmit={handleSend}
             className="p-4 bg-gray-900 border-t border-gray-800 flex gap-2"
           >
             <input
               ref={inputRef}
-              value={input}
-              onChange={e => setInput(e.target.value)}
+              value={draft}
+              onChange={e => setDraft(e.target.value)}
               placeholder="Type a message…"
               className="flex-1 px-4 py-2 rounded-md bg-gray-800 border border-gray-700 placeholder-gray-400 focus:outline-none"
             />
             <button
               type="submit"
-              className="bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-md"
+              disabled={!draft.trim()}
+              className="bg-blue-700 hover:bg-blue-800 disabled:opacity-40 text-white px-4 py-2 rounded-md"
             >
               Send
             </button>
