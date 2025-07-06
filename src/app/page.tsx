@@ -18,7 +18,7 @@ export default function Home() {
 
   /* ── load agent list once ── */
   useEffect(() => {
-    fetch('/api/chat/agents')
+    fetch(`${process.env.NEXT_PUBLIC_API_BASE}/agents`)
       .then(r => r.json())
       .then(setAgents)
       .catch(console.error);
@@ -27,7 +27,7 @@ export default function Home() {
   /* ── load history every time agent changes ── */
   useEffect(() => {
     if (!selectedAgent) return;
-    fetch(`/api/chat/messages/${selectedAgent}`)
+    fetch(`${process.env.NEXT_PUBLIC_API_BASE}/messages/${selectedAgent}`) 
       .then(r => (r.ok ? r.json() : []))
       .then(setMessages)
       .catch(() => setMessages([]));
