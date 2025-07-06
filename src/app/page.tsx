@@ -1,116 +1,131 @@
 // src/app/page.tsx
-'use client'
+// Same dark-theme UI, now wired to stream responses character-by-character.
 
-import { useEffect, useState } from 'react'
-import clsx from 'clsx'
+'use client';
+
+import { useEffect, useRef, useState, FormEvent } from 'react';
+import clsx from 'clsx';
+import { streamChat } from '@/lib/ollamaStream';
+
+type ChatMsg = { from: string; text: string };
 
 export default function Home() {
-  const [agents, setAgents] = useState<string[]>([])
-  const [selectedAgent, setSelectedAgent] = useState<string | null>(null)
-  const [messages, setMessages] = useState<{ from: string; text: string }[]>([])
-  const [input, setInput] = useState('')
+  const [agents, setAgents] = useState<string[]>([]);
+  const [selectedAgent, setSelectedAgent] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [input, setInput] = useState('');
+  const inputRef = useRef<HTMLInputElement>(null);
 
+  /* ── load agent list once ── */
   useEffect(() => {
-    fetch('https://llama-chat.aoe2hdbets.com/api/chat/agents')
-      .then(res => res.json())
-      .then((data) => setAgents(data))
-  }, [])
+    fetch('/api/chat/agents')
+      .then(r => r.json())
+      .then(setAgents)
+      .catch(console.error);
+  }, []);
 
+  /* ── load history every time agent changes ── */
   useEffect(() => {
-    if (!selectedAgent) return
-    fetch(`https://llama-chat.aoe2hdbets.com/api/chat/messages/${selectedAgent}`)
-      .then(res => {
-        if (!res.ok) throw new Error('Message fetch failed')
-        return res.json()
-      })
+    if (!selectedAgent) return;
+    fetch(`/api/chat/messages/${selectedAgent}`)
+      .then(r => (r.ok ? r.json() : []))
       .then(setMessages)
-      .catch(() => setMessages([]))  // Fallback to empty array if 404
-  }, [selectedAgent])
+      .catch(() => setMessages([]));
+  }, [selectedAgent]);
 
+  /* ── send prompt + stream reply ── */
+  async function handleSend(e?: FormEvent) {
+    e?.preventDefault();
+    if (!input.trim() || !selectedAgent) return;
+
+    const prompt = input;
+    setInput('');
+    setMessages(m => [...m, { from: 'me', text: prompt }]);
+
+    try {
+      const reader = streamChat({ to: selectedAgent, text: prompt }).getReader();
+      let acc = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        acc += value.data;
+
+        setMessages(m => {
+          const next = [...m];
+          if (next[next.length - 1]?.from === selectedAgent) next.pop();
+          next.push({ from: selectedAgent, text: acc });
+          return next;
+        });
+      }
+    } catch (err) {
+      console.error('[chat] stream failed', err);
+    }
+  }
+
+  /* ── UI ── */
   return (
     <div className="h-screen flex bg-gray-950 text-white">
-      {/* Sidebar */}
-      <div className="w-64 bg-gray-900 text-white p-4 space-y-2 border-r border-gray-800">
+      {/* sidebar */}
+      <aside className="w-64 bg-gray-900 p-4 space-y-2 border-r border-gray-800">
         <h2 className="text-xl font-semibold mb-4">Agents</h2>
-        {agents.map((agent) => (
+        {agents.map(a => (
           <div
-            key={agent}
-            onClick={() => setSelectedAgent(agent)}
+            key={a}
+            onClick={() => setSelectedAgent(a)}
             className={clsx(
               'cursor-pointer px-3 py-2 rounded-md transition',
-              selectedAgent === agent
-                ? 'bg-gray-700 font-bold'
-                : 'hover:bg-gray-800'
+              selectedAgent === a ? 'bg-gray-700 font-bold' : 'hover:bg-gray-800',
             )}
           >
-            {agent}
+            {a}
           </div>
         ))}
-      </div>
+      </aside>
 
-      {/* Chat Window */}
-      <div className="flex-1 flex flex-col bg-gray-950 text-white">
-        {/* Header */}
-        <div className="px-6 py-4 bg-gray-900 shadow font-semibold text-lg border-b border-gray-800">
+      {/* chat column */}
+      <section className="flex-1 flex flex-col">
+        <header className="px-6 py-4 bg-gray-900 border-b border-gray-800 font-semibold text-lg">
           {selectedAgent ? `Chat with ${selectedAgent}` : 'Select an agent'}
-        </div>
+        </header>
 
-        {/* Messages */}
         <div className="flex-1 overflow-y-auto p-6 space-y-3 text-sm">
-          {messages.map((msg, idx) => (
-            <div
-              key={idx}
+          {messages.map((m, i) => (
+            <p
+              key={i}
               className={clsx(
                 'max-w-md px-4 py-2 rounded-lg',
-                msg.from === 'me'
+                m.from === 'me'
                   ? 'bg-blue-600 text-white ml-auto'
-                  : 'bg-gray-800 text-white'
+                  : 'bg-gray-800 text-white',
               )}
             >
-              {msg.text}
-            </div>
+              {m.text}
+            </p>
           ))}
         </div>
 
-        {/* Input */}
         {selectedAgent && (
-          <div className="p-4 bg-gray-900 border-t border-gray-800 flex gap-2">
+          <form
+            onSubmit={handleSend}
+            className="p-4 bg-gray-900 border-t border-gray-800 flex gap-2"
+          >
             <input
+              ref={inputRef}
               value={input}
-              onChange={(e) => setInput(e.target.value)}
-              placeholder="Type a message..."
-              className="flex-1 px-4 py-2 border border-gray-700 rounded-md bg-gray-800 text-white placeholder-gray-400 focus:outline-none focus:ring"
+              onChange={e => setInput(e.target.value)}
+              placeholder="Type a message…"
+              className="flex-1 px-4 py-2 rounded-md bg-gray-800 border border-gray-700 placeholder-gray-400 focus:outline-none"
             />
             <button
-              onClick={async () => {
-                const userMessage = { from: 'me', text: input }
-                setMessages(prev => [...prev, userMessage])
-                setInput('')
-
-                try {
-                  const res = await fetch('https://llama-chat.aoe2hdbets.com/api/chat/send', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ to: selectedAgent, text: input }),
-                  })
-
-                  const data = await res.json()
-
-                  if (data.text) {
-                    const agentMessage = { from: selectedAgent, text: data.text }
-                    setMessages(prev => [...prev, agentMessage])
-                  }
-                } catch (err) {
-                  console.error('❌ Chat send failed:', err)
-                }
-              }}
+              type="submit"
               className="bg-blue-700 hover:bg-blue-800 text-white px-4 py-2 rounded-md"
             >
               Send
             </button>
-          </div>
+          </form>
         )}
-      </div>
+      </section>
     </div>
-  )
+  );
 }
