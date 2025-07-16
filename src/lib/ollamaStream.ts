@@ -4,64 +4,83 @@ import {
   type ReconnectInterval,
 } from 'eventsource-parser';
 
+/** The JSON envelope each SSE frame carries */
 export interface ChatChunk {
-  data: string;
-  done: boolean;
+  data?: string;
+  done?: boolean;
+  error?: string;
 }
 
-const IDLE_MS = 90_000;
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '';
+const SEND_URL = `${API_BASE}/api/chat/send`;
+const IDLE_MS  = 90_000; // Close if idle for 90s
 
+/**
+ * Open an SSE stream to the chat endpoint.
+ * Returns a readable stream of ChatChunk objects.
+ */
 export function streamChat(
   body: Record<string, unknown>,
   signal?: AbortSignal,
-  base = `${process.env.NEXT_PUBLIC_API_BASE ?? ''}/llama3`,
+  url: string = SEND_URL,
 ): ReadableStream<ChatChunk> {
-  const payload = { ...body, stream: true };
   const decoder = new TextDecoder();
+  const payload = { ...body, stream: true };
 
   return new ReadableStream<ChatChunk>({
     async start(controller) {
-      const res = await fetch(base, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-        signal,
-      });
+      let response: Response;
 
-      if (!res.ok || !res.body) {
+      try {
+        response = await fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+          signal,
+        });
+      } catch (err) {
+        controller.error(new Error(`❌ streamChat: failed to connect (${err})`));
+        return;
+      }
+
+      if (!response.ok || !response.body) {
         controller.error(
-          new Error(`streamChat: ${res.status} ${res.statusText}`),
+          new Error(`❌ streamChat: ${response.status} ${response.statusText}`),
         );
         return;
       }
 
-      const parser = createParser((evt: ParsedEvent | ReconnectInterval) => {
-        if ('data' in evt) {
+      const parser = createParser((event: ParsedEvent | ReconnectInterval) => {
+        if ('data' in event) {
           try {
-            const chunk = JSON.parse(evt.data) as ChatChunk;
+            const chunk = JSON.parse(event.data) as ChatChunk;
             controller.enqueue(chunk);
             if (chunk.done) controller.close();
-          } catch {
-            controller.error(new Error('Malformed JSON in stream chunk'));
+          } catch (err) {
+            controller.error(new Error('❌ Malformed JSON in SSE chunk'));
           }
         }
       });
 
-      const reader = res.body.getReader();
+      const reader = response.body.getReader();
       let lastBeat = Date.now();
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
 
-        parser.feed(decoder.decode(value));
-        lastBeat = Date.now();
+          parser.feed(decoder.decode(value));
+          lastBeat = Date.now();
 
-        if (Date.now() - lastBeat > IDLE_MS) break;
+          if (Date.now() - lastBeat > IDLE_MS) break; // idle timeout
+        }
+      } catch (err) {
+        controller.error(new Error(`❌ SSE stream interrupted: ${err}`));
+      } finally {
+        controller.enqueue({ done: true });
+        controller.close();
       }
-
-      controller.enqueue({ data: '', done: true });
-      controller.close();
     },
   });
 }

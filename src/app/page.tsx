@@ -3,19 +3,30 @@
 import { useEffect, useRef, useState, FormEvent } from 'react';
 import clsx from 'clsx';
 import { streamChat } from '@/lib/ollamaStream';
+import ReactMarkdown from 'react-markdown';
 
-type ChatMsg = { from: string; text: string };
+type ChatMsg = { from: string; text: string; timestamp?: string };
+
+const API = process.env.NEXT_PUBLIC_API_BASE!;
+
+function clean(text: string): string {
+  return text
+    .replace(/\b(\w+)(\s+\1\b)+/gi, '$1')
+    .replace(/[ \t]+/g, ' ')
+    .trim();
+}
 
 export default function Home() {
   const [agents, setAgents] = useState<string[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
   const [draft, setDraft] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
+
   const listRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    fetch(`${process.env.NEXT_PUBLIC_API_BASE}/agents`)
+    fetch(`${API}/api/chat/agents`)
       .then(r => r.json())
       .then(setAgents)
       .catch(console.error);
@@ -23,10 +34,25 @@ export default function Home() {
 
   useEffect(() => {
     if (!selected) return;
-    fetch(`${process.env.NEXT_PUBLIC_API_BASE}/messages/${selected}`)
+
+    const saved = localStorage.getItem(`chat-${selected}`);
+    const localMsgs: ChatMsg[] = saved ? JSON.parse(saved) : [];
+
+    fetch(`${API}/api/chat/messages/${selected}`)
       .then(r => (r.ok ? r.json() : []))
-      .then(setMsgs)
-      .catch(() => setMsgs([]));
+      .then(apiMsgs => {
+        const merged = [...localMsgs];
+        for (const msg of apiMsgs) {
+          if (!merged.some(m => m.from === msg.from && m.text === msg.text)) {
+            merged.push(msg);
+          }
+        }
+        setMsgs(merged);
+        localStorage.setItem(`chat-${selected}`, JSON.stringify(merged));
+      })
+      .catch(() => {
+        setMsgs(localMsgs);
+      });
   }, [selected]);
 
   useEffect(() => {
@@ -37,33 +63,68 @@ export default function Home() {
     e?.preventDefault();
     if (!draft.trim() || !selected) return;
 
-    const prompt = draft;
+    const prompt = draft.trim();
+    const userMsg: ChatMsg = {
+      from: 'me',
+      text: prompt,
+      timestamp: new Date().toISOString(),
+    };
+
     setDraft('');
-    setMsgs(m => [...m, { from: 'me', text: prompt }]);
+    inputRef.current?.focus();
+
+    setMsgs(prev => {
+      const next = [...prev, userMsg];
+      localStorage.setItem(`chat-${selected}`, JSON.stringify(next));
+      return next;
+    });
 
     try {
       const stream = streamChat({ text: prompt, to: selected });
       const reader = stream.getReader();
+      let answer = '';
 
-      let created = false;
       while (true) {
         const { value, done } = await reader.read();
-        if (done) break;
-        if (!value?.data?.trim()) continue;
+        if (done || !value) break;
+        if (value.error) throw new Error(value.error);
+        if (!value.data?.trim()) continue;
+
+        answer += value.data;
+        const tidy = clean(answer);
 
         setMsgs(prev => {
-          const next = [...prev];
-          if (!created) {
-            next.push({ from: selected, text: value.data });
-            created = true;
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+
+          if (last?.from === selected) {
+            updated[updated.length - 1] = {
+              ...last,
+              text: tidy,
+              timestamp: new Date().toISOString(),
+            };
           } else {
-            next[next.length - 1].text += value.data;
+            updated.push({
+              from: selected!,
+              text: tidy,
+              timestamp: new Date().toISOString(),
+            });
           }
-          return next;
+
+          localStorage.setItem(`chat-${selected}`, JSON.stringify(updated));
+          return updated;
         });
       }
     } catch (err) {
       console.error('[chat] stream failed', err);
+      setMsgs(prev => {
+        const next = [
+          ...prev,
+          { from: selected!, text: '⚠️ connection error' },
+        ];
+        localStorage.setItem(`chat-${selected}`, JSON.stringify(next));
+        return next;
+      });
     }
   }
 
@@ -95,17 +156,28 @@ export default function Home() {
           className="flex-1 overflow-y-auto p-6 space-y-3 text-sm scroll-smooth"
         >
           {msgs.map((m, i) => (
-            <p
+            <div
               key={i}
               className={clsx(
-                'max-w-md px-4 py-2 rounded-lg whitespace-pre-wrap break-words',
+                'max-w-xl px-4 py-2 rounded-lg break-words leading-relaxed whitespace-pre-wrap',
                 m.from === 'me'
                   ? 'bg-blue-600 text-white ml-auto'
                   : 'bg-gray-800 text-white',
               )}
             >
-              {m.text}
-            </p>
+              <div className="prose prose-invert prose-sm dark:prose-invert">
+                <ReactMarkdown>{m.text}</ReactMarkdown>
+              </div>
+              {m.timestamp && (
+                <div className="text-gray-400 text-xs mt-1">
+                  {new Date(m.timestamp).toLocaleTimeString(undefined, {
+                    hour: 'numeric',
+                    minute: '2-digit',
+                    hour12: true,
+                  })}
+                </div>
+              )}
+            </div>
           ))}
         </div>
 
@@ -118,6 +190,9 @@ export default function Home() {
               ref={inputRef}
               value={draft}
               onChange={e => setDraft(e.target.value)}
+              onKeyDown={e => {
+                if (e.key === 'Enter' && !e.shiftKey) handleSend(e);
+              }}
               placeholder="Type a message…"
               className="flex-1 px-4 py-2 rounded-md bg-gray-800 border border-gray-700 placeholder-gray-400 focus:outline-none"
             />
