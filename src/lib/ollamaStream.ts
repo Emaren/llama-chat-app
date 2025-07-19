@@ -12,7 +12,7 @@ export interface ChatChunk {
 }
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '';
-const SEND_URL = `${API_BASE}/api/chat/send`;
+const SEND_URL = `${API_BASE}/send`;
 const IDLE_MS  = 90_000; // Close if idle for 90s
 
 /**
@@ -39,7 +39,7 @@ export function streamChat(
           signal,
         });
       } catch (err) {
-        controller.error(new Error(`❌ streamChat: failed to connect (${err})`));
+        controller.error(new Error(`❌ streamChat: failed to connect (${String(err)})`));
         return;
       }
 
@@ -57,7 +57,7 @@ export function streamChat(
             controller.enqueue(chunk);
             if (chunk.done) controller.close();
           } catch (err) {
-            controller.error(new Error('❌ Malformed JSON in SSE chunk'));
+            controller.error(new Error(`❌ Malformed JSON in SSE chunk: ${String(err)}`));
           }
         }
       });
@@ -76,7 +76,7 @@ export function streamChat(
           if (Date.now() - lastBeat > IDLE_MS) break; // idle timeout
         }
       } catch (err) {
-        controller.error(new Error(`❌ SSE stream interrupted: ${err}`));
+        controller.error(new Error(`❌ SSE stream interrupted: ${String(err)}`));
       } finally {
         controller.enqueue({ done: true });
         controller.close();

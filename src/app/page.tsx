@@ -26,7 +26,7 @@ export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    fetch(`${API}/api/chat/agents`)
+    fetch(`${API}/agents`)
       .then(r => r.json())
       .then(setAgents)
       .catch(console.error);
@@ -38,7 +38,7 @@ export default function Home() {
     const saved = localStorage.getItem(`chat-${selected}`);
     const localMsgs: ChatMsg[] = saved ? JSON.parse(saved) : [];
 
-    fetch(`${API}/api/chat/messages/${selected}`)
+    fetch(`${API}/messages/${selected}`)
       .then(r => (r.ok ? r.json() : []))
       .then(apiMsgs => {
         const merged = [...localMsgs];
@@ -80,7 +80,7 @@ export default function Home() {
     });
 
     try {
-      const stream = streamChat({ text: prompt, to: selected });
+      const stream = streamChat({ text: prompt, to: selected }, undefined, `${API}/send`);
       const reader = stream.getReader();
       let answer = '';
 
