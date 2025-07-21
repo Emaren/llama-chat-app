@@ -55,16 +55,22 @@ export function streamChat(
       let closed = false;
       const safeEnqueue = (c: ChatChunk) => {
         if (closed) return;
-        try { controller.enqueue(c); } catch (_) { /* ignore */ }
+        try { controller.enqueue(c); } catch {
+                                     }
+
       };
       const safeClose   = () => {
         if (closed) return;
         closed = true;
-        try { controller.close(); } catch (_) { /* ignore */ }
+        try { controller.close(); } catch {
+                                  }
+
       };
       const safeError   = (e: Error) => {
         if (closed) return;
-        try { controller.error(e); } catch (_) { /* ignore */ }
+        try { controller.error(e); } catch {
+                                   }
+
         closed = true;
       };
 
