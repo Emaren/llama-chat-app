@@ -105,7 +105,7 @@ export function Bubble({ msg }: { msg: ChatMsg }) {
               </div>
             );
           },
-          img({ node, ...props }) {
+          img({ ...props }) {
             return (
               <img
                 {...props}

@@ -10,7 +10,6 @@ import clsx from 'clsx';
 import { streamChat } from '@/lib/ollamaStream';
 import { uuid } from '@/components/uuid';
 import { Bubble } from '@/components/Bubble';
-import { ArrowDown } from 'lucide-react';
 
 type ChatMsg = { id: string; from: string; text: string; ts: string };
 const mk = (p: Partial<ChatMsg>): ChatMsg => ({
@@ -42,14 +41,14 @@ export default function Home() {
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    fetch(`${API}/api/chat/agents`)
+    fetch(`${API}/agents`)
       .then(r => r.json())
       .then(setAgents);
   }, []);
 
   useEffect(() => {
     if (!selected) return;
-    fetch(`${API}/api/chat/messages/${selected}?limit=200`)
+    fetch(`${API}/messages/${selected}?limit=200`)
       .then(r => (r.ok ? r.json() : []))
       .then((hist: ChatMsg[]) => {
         const full = hist.map(mk);
@@ -73,25 +72,24 @@ export default function Home() {
   }, [selected]);
 
   useEffect(() => {
-    const timer = setTimeout(() => setAllowScrollButton(true), 500); // or 300ms
+    const timer = setTimeout(() => setAllowScrollButton(true), 500);
     return () => clearTimeout(timer);
   }, []);
-  
+
   useEffect(() => {
-    if (!historyLoaded) return; // ⛔ don't attach until ready
-  
+    if (!historyLoaded) return;
     const ref = listRef.current;
     if (!ref) return;
-  
+
     const handleScroll = () => {
       const { scrollTop, clientHeight, scrollHeight } = ref;
       const distance = scrollHeight - scrollTop - clientHeight;
       setShowScrollButton(distance > 300);
     };
-  
+
     ref.addEventListener('scroll', handleScroll);
     return () => ref.removeEventListener('scroll', handleScroll);
-  }, [historyLoaded]); // ✅ run only when history is loaded  
+  }, [historyLoaded]);
 
   async function handleSend(e?: FormEvent) {
     e?.preventDefault();
@@ -115,7 +113,7 @@ export default function Home() {
       const reader = streamChat(
         { text: prompt, to: selected },
         undefined,
-        `${API}/api/chat/send`,
+        `${API}/send`,
       ).getReader();
 
       while (true) {
@@ -145,14 +143,12 @@ export default function Home() {
 
   return (
     <div className="h-screen flex bg-gray-950 text-white relative">
-
       {/* Sidebar */}
       <aside className={clsx(
         "fixed inset-y-0 left-0 z-30 w-64 bg-gray-900 p-4 space-y-2 border-r border-gray-800 transform transition-transform duration-300 ease-in-out",
         sidebarOpen ? "translate-x-0" : "-translate-x-full"
       )}>
         <h2 className="text-xl font-semibold mb-4">Agents</h2>
-
         {agents.map(a => (
           <div
             key={a}
@@ -220,7 +216,7 @@ export default function Home() {
         {selected && (
           <form
             onSubmit={handleSend}
-            className="p-3 bg-gray-900 flex gap-2" // no border-t
+            className="p-3 bg-gray-900 flex gap-2"
           >
             <textarea
               ref={inputRef}
@@ -240,7 +236,6 @@ export default function Home() {
               rows={1}
               className="flex-1 px-4 py-2 rounded-md bg-gray-800 border border-gray-700 placeholder-gray-400 focus:outline-none resize-none overflow-hidden max-h-60"
             />
-
             <button
               type="submit"
               disabled={!draft.trim()}
