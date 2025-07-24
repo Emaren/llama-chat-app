@@ -23,3 +23,9 @@ logs/
 
 # VSCode
 .vscode/
+
+# Python virtual environments
+venv/
+.envrc
+.env
+
