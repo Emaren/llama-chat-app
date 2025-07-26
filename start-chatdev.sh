@@ -1,1 +1,1 @@
-../llama-scripts/start-chatdev.sh
+/Users/tonyblum/projects/llama-scripts/start-chatdev.sh
