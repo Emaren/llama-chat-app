@@ -1,19 +1,18 @@
 // src/lib/apiClient.ts
 
-export const getApiBase = () => {
-  const envBase = process.env.NEXT_PUBLIC_API_BASE || 'http://localhost:8006';
+function normalizeBase(value: string) {
+  return value.replace(/\/$/, '');
+}
 
-  if (typeof window !== 'undefined') {
-    try {
-      const url = new URL(envBase);
-      url.hostname = window.location.hostname;
-      return url.toString().replace(/\/$/, '');
-    } catch (err) {
-      console.error('Invalid API base URL:', envBase, err);
-    }
+export const getApiBase = () => {
+  const envBase = process.env.NEXT_PUBLIC_API_BASE?.trim();
+  if (envBase) {
+    return normalizeBase(envBase);
   }
 
-  return envBase.replace(/\/$/, '');
+  // Production nginx proxies /api/ -> 127.0.0.1:3350/api/
+  // and app.main mounts chat routes under /api/chat.
+  return '/api/chat';
 };
 
 export const apiFetch = (path: string, options?: RequestInit) =>
