@@ -2,12 +2,14 @@
 
 import {
   FormEvent,
+  useCallback,
   useEffect,
   useRef,
   useState,
 } from 'react';
 import clsx from 'clsx';
 import { streamChat } from '@/lib/ollamaStream';
+import { apiFetch } from '@/lib/apiClient';
 import { uuid } from '@/components/uuid';
 import { Bubble } from '@/components/Bubble';
 
@@ -19,16 +21,12 @@ const mk = (p: Partial<ChatMsg>): ChatMsg => ({
   ts: p.ts ?? new Date().toISOString(),
 });
 
-const API =
-  process.env.NEXT_PUBLIC_API_BASE ??
-  (typeof window !== 'undefined' && location.hostname === 'localhost'
-    ? 'http://localhost:8006'
-    : 'http://172.20.10.3:8006');
-
 const MAX_HISTORY_CHARS = 100_000;
 
 export default function Home() {
   const [agents, setAgents] = useState<string[]>([]);
+  const [agentsLoading, setAgentsLoading] = useState(true);
+  const [agentsError, setAgentsError] = useState<string | null>(null);
   const [selected, setSelected] = useState<string>();
   const [draft, setDraft] = useState('');
   const [msgs, setMsgs] = useState<ChatMsg[]>([]);
@@ -40,15 +38,45 @@ export default function Home() {
   const listRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  useEffect(() => {
-    fetch(`${API}/agents`)
-      .then(r => r.json())
-      .then(setAgents);
+  const loadAgents = useCallback(async () => {
+    setAgentsLoading(true);
+    setAgentsError(null);
+
+    try {
+      const response = await apiFetch('/agents', { cache: 'no-store' });
+      if (!response.ok) {
+        throw new Error(`Agents request failed: ${response.status}`);
+      }
+
+      const payload = (await response.json()) as unknown;
+      const nextAgents = Array.isArray(payload)
+        ? payload.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)
+        : [];
+
+      setAgents(nextAgents);
+      setSelected(current => {
+        if (current && nextAgents.includes(current)) {
+          return current;
+        }
+        return nextAgents[0];
+      });
+    } catch (error) {
+      console.error('Failed to load agents:', error);
+      setAgents([]);
+      setAgentsError('Could not load agents from the Llama API.');
+    } finally {
+      setAgentsLoading(false);
+    }
   }, []);
 
   useEffect(() => {
+    void loadAgents();
+  }, [loadAgents]);
+
+  useEffect(() => {
     if (!selected) return;
-    fetch(`${API}/messages/${selected}?limit=200`)
+
+    apiFetch(`/messages/${selected}?limit=200`, { cache: 'no-store' })
       .then(r => (r.ok ? r.json() : []))
       .then((hist: ChatMsg[]) => {
         const full = hist.map(mk);
@@ -68,6 +96,11 @@ export default function Home() {
             behavior: 'auto',
           });
         }, 10);
+      })
+      .catch(error => {
+        console.error('Failed to load message history:', error);
+        setMsgs([]);
+        setHistoryLoaded(true);
       });
   }, [selected]);
 
@@ -110,11 +143,7 @@ export default function Home() {
     }, 10);
 
     try {
-      const reader = streamChat(
-        { text: prompt, to: selected },
-        undefined,
-        `${API}/send`,
-      ).getReader();
+      const reader = streamChat({ text: prompt, to: selected }).getReader();
 
       while (true) {
         const { value, done } = await reader.read();
@@ -143,51 +172,75 @@ export default function Home() {
 
   return (
     <div className="h-screen flex bg-gray-950 text-white relative">
-      {/* Sidebar */}
-      <aside className={clsx(
-        "fixed inset-y-0 left-0 z-30 w-64 bg-gray-900 p-4 space-y-2 border-r border-gray-800 transform transition-transform duration-300 ease-in-out",
-        sidebarOpen ? "translate-x-0" : "-translate-x-full"
-      )}>
-        <h2 className="text-xl font-semibold mb-4">Agents</h2>
-        {agents.map(a => (
-          <div
-            key={a}
-            onClick={() => {
-              setSelected(a);
-              setSidebarOpen(false);
-            }}
-            className={clsx(
-              'cursor-pointer px-3 py-2 rounded-md transition',
-              selected === a ? 'bg-gray-700 font-bold' : 'hover:bg-gray-800',
-            )}
+      <aside
+        className={clsx(
+          'fixed inset-y-0 left-0 z-30 w-64 bg-gray-900 p-4 border-r border-gray-800 transform transition-transform duration-300 ease-in-out md:static md:translate-x-0 md:z-0 md:flex md:flex-col',
+          sidebarOpen ? 'translate-x-0' : '-translate-x-full'
+        )}
+      >
+        <div className="flex items-center justify-between gap-3 mb-4">
+          <h2 className="text-xl font-semibold">Agents</h2>
+          <button
+            type="button"
+            onClick={() => void loadAgents()}
+            className="rounded bg-gray-800 px-2.5 py-1 text-xs text-gray-200 hover:bg-gray-700"
           >
-            {a}
-          </div>
-        ))}
+            Refresh
+          </button>
+        </div>
+
+        <div className="mb-3 text-xs text-gray-400">
+          {agentsLoading
+            ? 'Loading agents...'
+            : agentsError
+              ? agentsError
+              : `${agents.length} agents loaded`}
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+          {!agentsLoading && !agentsError && agents.length === 0 ? (
+            <div className="rounded-md border border-gray-800 bg-gray-950/70 px-3 py-3 text-sm text-gray-400">
+              No agents returned by the API.
+            </div>
+          ) : null}
+
+          {agents.map(a => (
+            <button
+              key={a}
+              type="button"
+              onClick={() => {
+                setSelected(a);
+                setSidebarOpen(false);
+              }}
+              className={clsx(
+                'block w-full cursor-pointer rounded-md px-3 py-2 text-left transition',
+                selected === a ? 'bg-gray-700 font-bold' : 'hover:bg-gray-800'
+              )}
+            >
+              {a}
+            </button>
+          ))}
+        </div>
       </aside>
 
-      {/* Overlay */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 z-20 bg-black bg-opacity-50"
+          className="fixed inset-0 z-20 bg-black/50 md:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
-      {/* Main section */}
-      <section className="flex-1 flex flex-col">
-        {/* Header */}
+      <section className="flex-1 flex min-w-0 flex-col">
         <header className="flex items-center gap-3 px-6 py-3 bg-gray-900 border-b border-gray-800 font-semibold text-base">
           <button
             onClick={() => setSidebarOpen(prev => !prev)}
-            className="bg-gray-800 hover:bg-gray-700 text-white text-sm rounded px-3 py-1 shadow"
+            className="rounded bg-gray-800 px-3 py-1 text-sm text-white shadow hover:bg-gray-700 md:hidden"
           >
             ☰
           </button>
           {selected ? `Chat with ${selected}` : 'Select an agent'}
         </header>
 
-        {/* Messages */}
         <div
           ref={listRef}
           className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2 text-sm scroll-smooth"
@@ -197,7 +250,6 @@ export default function Home() {
           ))}
         </div>
 
-        {/* Scroll-to-bottom button */}
         {allowScrollButton && historyLoaded && showScrollButton && !sidebarOpen && (
           <button
             onClick={() => {
@@ -206,18 +258,14 @@ export default function Home() {
                 behavior: 'smooth',
               });
             }}
-            className="absolute bottom-20 left-1/2 transform -translate-x-1/2 px-4 py-1 rounded-full bg-blue-900 text-white text-sm shadow hover:bg-blue-800 transition z-30"
+            className="absolute bottom-20 left-1/2 z-30 -translate-x-1/2 transform rounded-full bg-blue-900 px-4 py-1 text-sm text-white shadow transition hover:bg-blue-800"
           >
             ⬇
           </button>
         )}
 
-        {/* Input */}
         {selected && (
-          <form
-            onSubmit={handleSend}
-            className="p-3 bg-gray-900 flex gap-2"
-          >
+          <form onSubmit={handleSend} className="p-3 bg-gray-900 flex gap-2">
             <textarea
               ref={inputRef}
               value={draft}
@@ -234,12 +282,12 @@ export default function Home() {
               }}
               placeholder="Type a message…"
               rows={1}
-              className="flex-1 px-4 py-2 rounded-md bg-gray-800 border border-gray-700 placeholder-gray-400 focus:outline-none resize-none overflow-hidden max-h-60"
+              className="flex-1 max-h-60 resize-none overflow-hidden rounded-md border border-gray-700 bg-gray-800 px-4 py-2 placeholder-gray-400 focus:outline-none"
             />
             <button
               type="submit"
               disabled={!draft.trim()}
-              className="bg-blue-700 hover:bg-blue-800 disabled:opacity-40 text-white px-4 py-2 rounded-md"
+              className="rounded-md bg-blue-700 px-4 py-2 text-white disabled:opacity-40 hover:bg-blue-800"
             >
               Send
             </button>

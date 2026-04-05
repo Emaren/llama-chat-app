@@ -3,6 +3,7 @@ import {
   type ParsedEvent,
   type ReconnectInterval,
 } from 'eventsource-parser';
+import { getApiBase } from '@/lib/apiClient';
 
 export interface ChatChunk {
   data?: string;
@@ -10,14 +11,9 @@ export interface ChatChunk {
   error?: string;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? '';
-const SEND_URL = `${API_BASE}/send`;
-const IDLE_MS  = 90_000;   // abort if no data for 90 s
+const SEND_URL = `${getApiBase()}/send`;
+const IDLE_MS = 90_000;
 
-/**
- * Open an SSE stream to the chat endpoint and return a
- * ReadableStream<ChatChunk> that never double-enqueues or double-closes.
- */
 export function streamChat(
   body: Record<string, unknown>,
   signal?: AbortSignal,
@@ -28,7 +24,6 @@ export function streamChat(
 
   return new ReadableStream<ChatChunk>({
     async start(controller) {
-      /* ── 1. open the POST request ───────────────────────── */
       let resp: Response;
       try {
         resp = await fetch(url, {
@@ -51,60 +46,71 @@ export function streamChat(
         return;
       }
 
-      /* ── 2. safe-wrap controller ops ─────────────────────── */
       let closed = false;
       const safeEnqueue = (c: ChatChunk) => {
         if (closed) return;
-        try { controller.enqueue(c); } catch {
-                                     }
-
+        try {
+          controller.enqueue(c);
+        } catch {}
       };
-      const safeClose   = () => {
+      const safeClose = () => {
         if (closed) return;
         closed = true;
-        try { controller.close(); } catch {
-                                  }
-
+        try {
+          controller.close();
+        } catch {}
       };
-      const safeError   = (e: Error) => {
+      const safeError = (e: Error) => {
         if (closed) return;
-        try { controller.error(e); } catch {
-                                   }
-
+        try {
+          controller.error(e);
+        } catch {}
         closed = true;
       };
 
-      /* ── 3. set up SSE parser ────────────────────────────── */
       const parser = createParser((ev: ParsedEvent | ReconnectInterval) => {
         if ('data' in ev) {
           try {
-            const pkt = JSON.parse(ev.data) as ChatChunk;
-            safeEnqueue(pkt);
-            if (pkt.done) safeClose();
+            const raw = ev.data.trim();
+            if (!raw) return;
+            if (raw === '[DONE]') {
+              safeEnqueue({ done: true });
+              safeClose();
+              return;
+            }
+            safeEnqueue({ data: raw });
           } catch (err) {
-            safeError(new Error(`❌ malformed JSON: ${String(err)}`));
+            safeError(new Error(`❌ streamChat: parse error (${String(err)})`));
           }
         }
       });
 
-      /* ── 4. pipe response bytes into parser ──────────────── */
-      const reader   = resp.body.getReader();
-      let   lastBeat = Date.now();
+      const reader = resp.body.getReader();
+      let idleTimer: ReturnType<typeof setTimeout> | null = null;
+      const bumpIdle = () => {
+        if (idleTimer) clearTimeout(idleTimer);
+        idleTimer = setTimeout(() => {
+          safeError(new Error('❌ streamChat: idle timeout'));
+          try {
+            reader.cancel();
+          } catch {}
+        }, IDLE_MS);
+      };
+
+      bumpIdle();
 
       try {
         while (true) {
           const { value, done } = await reader.read();
           if (done) break;
-          parser.feed(decoder.decode(value));
-          lastBeat = Date.now();
-
-          if (Date.now() - lastBeat > IDLE_MS) break; // idle timeout
+          bumpIdle();
+          parser.feed(decoder.decode(value, { stream: true }));
         }
-      } catch (err) {
-        safeError(new Error(`❌ SSE interrupted: ${String(err)}`));
-      } finally {
-        safeEnqueue({ done: true });
         safeClose();
+      } catch (err) {
+        safeError(new Error(`❌ streamChat: read error (${String(err)})`));
+      } finally {
+        if (idleTimer) clearTimeout(idleTimer);
       }
     },
   });
